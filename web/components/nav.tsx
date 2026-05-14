@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api, getToken, clearToken } from "@/lib/api";
 
 const tabs = [
   { href: "/",           label: "Overview" },
@@ -9,10 +11,23 @@ const tabs = [
   { href: "/energy",     label: "3. Energy" },
   { href: "/inference",  label: "4. Inference" },
   { href: "/photonics",  label: "5. Photonics" },
+  { href: "/ai-suite",   label: "AI Suite (NEW)" },
 ];
 
 export function Nav() {
   const path = usePathname();
+  const router = useRouter();
+  const [user, setUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setUser(null);
+      return;
+    }
+    api.me().then((u) => setUser(u.username)).catch(() => setUser(null));
+  }, [path]);
+
   return (
     <header className="border-b border-border bg-panel/50 backdrop-blur sticky top-0 z-10">
       <div className="max-w-6xl mx-auto flex items-center gap-6 px-6 py-3">
@@ -31,7 +46,25 @@ export function Nav() {
             );
           })}
         </nav>
-        <div className="ml-auto text-xs text-muted">auto-refresh 5s</div>
+        <div className="ml-auto text-xs text-muted flex items-center gap-3">
+          {user ? (
+            <>
+              <span>{user}</span>
+              <button
+                className="underline"
+                onClick={() => {
+                  clearToken();
+                  router.push("/login");
+                }}
+              >
+                sign out
+              </button>
+            </>
+          ) : (
+            <Link href="/login" className="underline">sign in</Link>
+          )}
+          <span>auto-refresh 5s</span>
+        </div>
       </div>
     </header>
   );

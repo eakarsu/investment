@@ -24,6 +24,57 @@ class Base(DeclarativeBase):
     pass
 
 
+# ---------- AI results / new-feature tables ----------
+class AiResult(Base):
+    """Generic AI run audit log — one row per LLM call across all features."""
+    __tablename__ = "ai_results"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    feature: Mapped[str] = mapped_column(String(64), index=True)
+    user_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    ref_type: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    ref_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model: Mapped[str] = mapped_column(String(96))
+    input: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    output: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Backtest(Base):
+    """Backtest run for the HBM admission controller (and other algorithms).
+    Stores the input request trace + result metrics.
+    """
+    __tablename__ = "backtests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    theme: Mapped[str] = mapped_column(String(32), index=True)
+    paper: Mapped[str] = mapped_column(String(48))
+    trace: Mapped[list | dict] = mapped_column(JSON)            # input request trace
+    metrics: Mapped[dict] = mapped_column(JSON)                 # admit / evict / oom / ...
+    baseline_metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    improvement_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PriceCacheEntry(Base):
+    """Persistent price cache for the scheduled price-refresh worker.
+    Replaces the in-process dict so multiple workers share state.
+    """
+    __tablename__ = "price_cache"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    price: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------- theme 1 ----------
 class HBMDecision(Base):
     __tablename__ = "hbm_decisions"

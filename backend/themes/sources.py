@@ -267,6 +267,238 @@ def run_paper(theme: str, paper: str) -> dict:
     return fn()
 
 
+def run_paper_with_inputs(theme: str, paper: str, inputs: dict) -> dict:
+    """Execute the paper's algorithm with caller-supplied (merged) inputs.
+
+    Each paper has a dedicated dispatcher that unpacks the known keys from
+    ``inputs`` so researchers can run custom scenarios without touching code.
+    Raises KeyError if theme/paper are unknown (→ HTTP 404 at the call site).
+    """
+    key = (theme, paper)
+
+    # ── HBM ──────────────────────────────────────────────────────────────────
+    if key == ("hbm", "H2O"):
+        from . import hbm_algorithms as hbm
+        attn = hbm.synth_attention(
+            length=inputs.get("context_len", 4096), seed=42
+        )
+        keep, recall = hbm.h2o_evict(
+            attn,
+            budget=inputs.get("budget", 512),
+            recent=inputs.get("recent", 128),
+            num_decode_steps=inputs.get("decode_steps", 16),
+        )
+        ctx = inputs.get("context_len", 4096)
+        return {
+            "inputs": inputs,
+            "kept_tokens": len(keep),
+            "recall": round(recall, 4),
+            "compression_ratio": round(ctx / len(keep), 2) if keep else 0,
+            "first_kept": keep[:5], "last_kept": keep[-5:],
+        }
+
+    if key == ("hbm", "StreamingLLM"):
+        from . import hbm_algorithms as hbm
+        ctx = inputs.get("context_len", 4096)
+        attn = hbm.synth_attention(ctx, seed=42)
+        keep, pos_map = hbm.streamingllm_remap(
+            ctx,
+            sinks=inputs.get("sinks", 4),
+            window=inputs.get("window", 508),
+        )
+        return {
+            "inputs": inputs,
+            "kept_tokens": len(keep),
+            "recall": round(hbm.recall_of(attn, set(keep)), 4),
+            "pos_remap_first3": dict(list(pos_map.items())[:3]),
+        }
+
+    if key == ("hbm", "Scissorhands"):
+        from . import hbm_algorithms as hbm
+        attn = hbm.synth_attention(inputs.get("context_len", 4096), seed=42)
+        keep, recall = hbm.scissorhands_evict(
+            attn,
+            inputs.get("budget", 512),
+            recent=inputs.get("recent", 128),
+            history=inputs.get("history", 64),
+            top_k_per_step=inputs.get("top_k_per_step", 16),
+            num_decode_steps=inputs.get("num_decode_steps", 16),
+        )
+        return {"inputs": inputs, "kept_tokens": len(keep), "recall": round(recall, 4)}
+
+    if key == ("hbm", "SnapKV"):
+        from . import hbm_algorithms as hbm
+        attn = hbm.synth_attention(inputs.get("context_len", 4096), seed=42)
+        keep, recall = hbm.snapkv_compress(
+            attn,
+            inputs.get("budget", 512),
+            obs_window=inputs.get("obs_window", 64),
+            pool_kernel=inputs.get("pool_kernel", 7),
+        )
+        return {"inputs": inputs, "kept_tokens": len(keep), "recall": round(recall, 4)}
+
+    if key == ("hbm", "KIVI"):
+        from . import hbm_algorithms as hbm
+        rep = hbm.kivi_memory(
+            kv_tokens=inputs.get("kv_tokens", 4096),
+            d_head=inputs.get("d_head", 128),
+            num_heads=inputs.get("heads", 8),
+            layers=inputs.get("layers", 80),
+            bits=inputs.get("bits", 2),
+            residual_tokens=inputs.get("residual", 32),
+            group_size=inputs.get("group_size", 32),
+        )
+        return {
+            "inputs": inputs,
+            "original_bytes": rep.original_bytes,
+            "compressed_bytes": rep.compressed_bytes,
+            "compression_ratio": round(rep.compression_ratio, 2),
+            "original_gb": round(rep.original_bytes / 1e9, 2),
+            "compressed_gb": round(rep.compressed_bytes / 1e9, 2),
+        }
+
+    # ── Networking ────────────────────────────────────────────────────────────
+    if theme == "networking":
+        from . import networking_algorithms as net
+        m = net.ModelSpec(
+            inputs.get("model", "llama-3-70b"), 70, 80, 8192
+        )
+        c = net.ClusterSpec(
+            inputs.get("gpus", 32), 8, 900, 400, 989
+        )
+        w = net.Workload(
+            inputs.get("prompt_tokens", 2048),
+            inputs.get("completion", 256),
+            rate_rps=inputs.get("rate_rps", 20),
+            slo_ttft_ms=inputs.get("slo_ttft_ms", 600),
+            slo_tpot_ms=inputs.get("slo_tpot_ms", 50),
+        )
+        paper_fn_map = {
+            "DistServe": "distserve",
+            "Splitwise": "splitwise",
+            "LoongServe": "loongserve",
+            "Helix": "helix",
+            "SpotServe": "spotserve",
+        }
+        fn_name = paper_fn_map.get(paper)
+        if fn_name is None:
+            raise KeyError(f"unknown networking paper: {paper}")
+        fn = getattr(net, fn_name)
+        out = fn(m, c, w)
+        return {"inputs": inputs, **{
+            k: v for k, v in out.items()
+            if isinstance(v, (int, float, str, bool, list, dict, type(None)))
+        }}
+
+    # ── Energy ────────────────────────────────────────────────────────────────
+    if key == ("energy", "Perseus"):
+        from . import energy_algorithms as en
+        r = en.perseus(
+            pipeline_stages=inputs.get("stages", 4),
+            stage_times_ms=inputs.get("times_ms", [100, 90, 75, 60]),
+        )
+        return {"inputs": inputs, **r}
+
+    if key == ("energy", "POLCA"):
+        from . import energy_algorithms as en
+        r = en.polca(
+            num_gpus=0,
+            gpu=inputs.get("gpu", "H100"),
+            rack_power_cap_kw=inputs.get("rack_cap_kw", 40),
+            safe_capped_watts=inputs.get("capped_w", 500),
+        )
+        return {"inputs": inputs, **{k: v for k, v in r.items()
+                                     if not isinstance(v, list) or len(v) < 10}}
+
+    if key == ("energy", "DynamoLLM"):
+        from . import energy_algorithms as en
+        _tier_specs = {
+            "llama-8b":  {"quality_frac": 0.6, "energy_mj_per_tok": 0.2, "accepts_rps_share": 0.6},
+            "llama-70b": {"quality_frac": 0.9, "energy_mj_per_tok": 1.0, "accepts_rps_share": 0.3},
+            "gpt-oss":   {"quality_frac": 1.0, "energy_mj_per_tok": 2.0, "accepts_rps_share": 0.1},
+        }
+        tier_names = inputs.get("tiers", ["llama-8b", "llama-70b", "gpt-oss"])
+        tiers = [{"name": n, **_tier_specs.get(n, _tier_specs["llama-8b"])} for n in tier_names]
+        r = en.dynamo_llm(workload_rps=inputs.get("rps", 200), model_tiers=tiers)
+        return {"inputs": inputs, **r}
+
+    if key == ("energy", "LLMCarbon"):
+        from . import energy_algorithms as en
+        r = en.llm_carbon(
+            params_b=inputs.get("params_b", 70),
+            training_gpu_hours=inputs.get("train_gpu_h", 1_600_000),
+            serving_tokens=inputs.get("serve_tok", 5e13),
+            grid_gco2_per_kwh=inputs.get("grid_gco2_per_kwh", 380),
+        )
+        return {"inputs": inputs, **r}
+
+    if key == ("energy", "VCC"):
+        from . import energy_algorithms as en
+        import random as _random
+        _random.seed(13)
+        hours = inputs.get("hours", 24)
+        intensity = [400 + 200 * abs((h - 18) / 12) for h in range(hours)]
+        demand = [max(1, _random.gauss(1000, 300)) for _ in range(hours)]
+        r = en.vcc_shift(intensity, demand, shiftable_fraction=inputs.get("shiftable_frac", 0.4))
+        return {"inputs": inputs, **r}
+
+    # ── Inference ─────────────────────────────────────────────────────────────
+    if theme == "inference":
+        from . import inference_algorithms as inf
+        paper_fn_map = {
+            "Medusa":         ("medusa",        {"num_heads": "num_heads", "acceptance_per_head": "acceptance_per_head"}),
+            "EAGLE":          ("eagle",          {"draft_depth": "draft_depth", "branching": "branching", "acceptance_rate": "acceptance_rate"}),
+            "Sarathi-Serve":  ("sarathi_serve",  {"prompt_tokens": "prompt_tokens", "chunk_size": "chunk_size"}),
+            "LLMLingua-2":    ("llmlingua2",     {"prompt_tokens": "prompt_tokens", "compress_rate": "compress_rate"}),
+            "RadixAttention": ("radix_attention", {"unique_prefixes": "unique_prefixes", "total_requests": "total_requests"}),
+        }
+        if paper == "RouteLLM":
+            import random as _random
+            dist = [_random.Random(7).betavariate(2, 5) for _ in range(inputs.get("n_queries", 1000))]
+            r = inf.route_llm(
+                strong_cost_per_tok=inputs.get("strong_cost_per_tok", 15),
+                weak_cost_per_tok=inputs.get("weak_cost_per_tok", 0.6),
+                query_difficulty_dist=dist,
+                quality_threshold=inputs.get("quality_thresh", 0.7),
+            )
+            return {"inputs": inputs, **{k: v for k, v in r.items()
+                    if isinstance(v, (int, float, str, bool, list, dict, type(None)))}}
+        entry = paper_fn_map.get(paper)
+        if entry is None:
+            raise KeyError(f"unknown inference paper: {paper}")
+        fn_name, param_map = entry
+        fn = getattr(inf, fn_name)
+        kwargs = {fn_key: inputs.get(inp_key, _INPUTS["inference"].get(paper, {}).get(inp_key))
+                  for fn_key, inp_key in param_map.items()}
+        r = fn(**{k: v for k, v in kwargs.items() if v is not None})
+        return {"inputs": inputs, **{k: v for k, v in r.items()
+                if isinstance(v, (int, float, str, bool, list, dict, type(None)))}}
+
+    # ── Photonics ─────────────────────────────────────────────────────────────
+    if theme == "photonics":
+        from . import photonics_algorithms as ph
+        paper_fn_map = {
+            "TopoOpt":     ("topo_opt",    {"num_gpus": "gpus", "dp": "dp", "pp": "pp"}),
+            "SiP-ML":      ("sip_ml",      {"num_gpus": "gpus", "wavelengths": "wavelengths"}),
+            "TACCL":       ("taccl",       {"num_gpus": "gpus", "topology": "topology"}),
+            "Rail-only":   ("rail_only",   {"num_gpus_per_rail": "gpus_per_rail", "num_rails": "rails"}),
+            "Jupiter OCS": ("jupiter_ocs", {"num_blocks": "blocks", "traffic_matrix_skew": "skew"}),
+        }
+        entry = paper_fn_map.get(paper)
+        if entry is None:
+            raise KeyError(f"unknown photonics paper: {paper}")
+        fn_name, param_map = entry
+        fn = getattr(ph, fn_name)
+        kwargs = {fn_key: inputs.get(inp_key, _INPUTS["photonics"].get(paper, {}).get(inp_key))
+                  for fn_key, inp_key in param_map.items()}
+        r = fn(**{k: v for k, v in kwargs.items() if v is not None})
+        return {"inputs": inputs, **{k: v for k, v in r.items()
+                if isinstance(v, (int, float, str, bool, list, dict, type(None)))}}
+
+    # Unknown
+    raise KeyError(f"unknown theme/paper: {theme}/{paper}")
+
+
 # Representative inputs per paper. Used by endpoints that delegate the actual
 # execution to an LLM (so we don't have to run the local Python first).
 _INPUTS: dict[str, dict[str, dict]] = {

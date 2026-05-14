@@ -45,12 +45,17 @@ async def chat(
     if response_format is not None:
         payload["response_format"] = response_format
 
+    # HTTP-Referer should mirror the deployed origin in production — pull from
+    # CORS_ORIGINS / NEXTAUTH_URL when available.
+    import os
+    referer = (
+        os.getenv("NEXTAUTH_URL")
+        or (settings.cors_origin_list[0] if settings.cors_origin_list else "http://localhost:3000")
+    )
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        # OpenRouter recommends these two (they do not block without them but
-        # they help with leaderboard / usage attribution).
-        "HTTP-Referer": "http://localhost:3000",
+        "HTTP-Referer": referer,
         "X-Title": "investment - 5-theme solutions",
     }
 
