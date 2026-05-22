@@ -11,6 +11,7 @@ const tabs = [
   { href: "/energy",     label: "3. Energy" },
   { href: "/inference",  label: "4. Inference" },
   { href: "/photonics",  label: "5. Photonics" },
+  { href: "/tax-lot-drift", label: "Tax-Lot Drift" },
   { href: "/ai-suite",   label: "AI Suite (NEW)" },
 ];
 

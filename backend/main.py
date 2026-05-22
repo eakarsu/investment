@@ -134,6 +134,29 @@ async def healthz():
     return {"ok": True}
 
 
+@app.get("/api/tax-lot-drift", tags=["portfolio"])
+async def tax_lot_drift(_user: Annotated[dict, Depends(require_auth)]):
+    return {
+        "feature": "Tax-Lot Drift",
+        "summary": {
+            "embedded_gain": 128400,
+            "harvestable_loss": 27150,
+            "wash_windows": 3,
+            "priority": "Review before rebalance",
+        },
+        "lots": [
+            {"symbol": "NVDA", "account": "Taxable", "gain_loss_pct": 42.6, "holding_period": "Long-term", "action": "Trim with gain budget"},
+            {"symbol": "SMH", "account": "Taxable", "gain_loss_pct": -8.9, "holding_period": "Short-term", "action": "Harvest candidate"},
+            {"symbol": "AVGO", "account": "IRA", "gain_loss_pct": 18.4, "holding_period": "Tax-deferred", "action": "Rebalance without tax impact"},
+        ],
+        "controls": [
+            "Block replacement buys inside active wash-sale windows.",
+            "Separate taxable, tax-deferred, and tax-exempt rebalance actions.",
+            "Cap realized gains against household tax budget before trade approval.",
+        ],
+    }
+
+
 @app.get("/api/source/{theme}/{paper}", tags=["algorithms"])
 async def paper_source(
     theme: str,

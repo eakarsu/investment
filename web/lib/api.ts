@@ -230,4 +230,5 @@ export const api = {
   listAiResults: (page = 1, pageSize = 20, feature?: string) =>
     j<Paged<any>>(`/api/ai-results?page=${page}&page_size=${pageSize}${feature ? `&feature=${feature}` : ""}`),
   aiResultsSummary: () => j<any>("/api/ai-results/summary"),
+  taxLotDrift: () => j<any>("/api/tax-lot-drift"),
 };
