@@ -1,0 +1,11 @@
+.git
+.env*
+!.env.example
+.venv
+**/node_modules
+**/.next
+**/__pycache__
+.pytest_cache
+*.db
+*.sqlite*
+codex-custom-viz-and-ops.html

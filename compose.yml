@@ -1,0 +1,65 @@
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: investment
+      POSTGRES_USER: investment
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - investment-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U investment -d investment"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DB_URL: postgresql+asyncpg://investment:${POSTGRES_PASSWORD}@database:5432/investment
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: "no"
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      DB_URL: postgresql+asyncpg://investment:${POSTGRES_PASSWORD}@database:5432/investment
+      ENVIRONMENT: production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      JWT_EXPIRE_MINUTES: "30"
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      MARKET_DATA_ALLOWED_HOSTS: ${MARKET_DATA_ALLOWED_HOSTS:?MARKET_DATA_ALLOWED_HOSTS is required}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+  web:
+    build:
+      context: .
+      target: web
+    environment:
+      API_BASE: http://api:8080
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  investment-data:

@@ -3,8 +3,8 @@ import { Nav } from "@/components/nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "investment · 5-theme solutions",
-  description: "Software for the 5 AI investment themes",
+  title: "Governed investment paper trading",
+  description: "Licensed evidence, deterministic risk, independent review, paper fills, and reconciliation",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

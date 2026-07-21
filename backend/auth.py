@@ -18,27 +18,27 @@ Configuration (add to .env):
 
 from __future__ import annotations
 
-import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from sqlalchemy import String, DateTime, Integer, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
 
+from .config import settings
 from .db import Base, SessionLocal
 
 # ─────────────────────────── Config ───────────────────────────────────────────
 
-SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "change-me-in-production-32chars!!!")
-ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
-EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 h
+SECRET_KEY: str = settings.jwt_secret_key
+ALGORITHM: str = "HS256"
+EXPIRE_MINUTES: int = settings.jwt_expire_minutes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -54,6 +54,8 @@ class AppUser(Base):
     email: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(256))
     is_active: Mapped[bool] = mapped_column(default=True)
+    role: Mapped[str] = mapped_column(String(24), default="INVESTOR")
+    token_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -62,14 +64,14 @@ class AppUser(Base):
 # ─────────────────────────── Pydantic Schemas ─────────────────────────────────
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=64, description="Unique username")
-    email: str = Field(..., description="Valid email address")
-    password: str = Field(..., min_length=8, description="Minimum 8 characters")
+    username: str = Field(..., min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$", description="Unique username")
+    email: str = Field(..., min_length=5, max_length=128, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", description="Valid email address")
+    password: str = Field(..., min_length=12, max_length=256, description="Minimum 12 characters")
 
 
 class LoginRequest(BaseModel):
     username: str = Field(..., description="Username or email")
-    password: str = Field(..., description="Account password")
+    password: str = Field(..., min_length=1, max_length=256, description="Account password")
 
 
 class TokenResponse(BaseModel):
@@ -84,6 +86,7 @@ class UserInfo(BaseModel):
     username: str
     email: str
     is_active: bool
+    role: str
     created_at: datetime
 
 
@@ -99,12 +102,21 @@ def _verify_password(plain: str, hashed: str) -> bool:
 
 def _create_token(data: dict) -> str:
     payload = data.copy()
-    payload["exp"] = datetime.utcnow() + timedelta(minutes=EXPIRE_MINUTES)
+    now = datetime.now(timezone.utc)
+    payload.update({
+        "iat": now,
+        "exp": now + timedelta(minutes=EXPIRE_MINUTES),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+    })
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def _decode_token(token: str) -> dict:
-    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    return jwt.decode(
+        token, SECRET_KEY, algorithms=[ALGORITHM],
+        issuer=settings.jwt_issuer, audience=settings.jwt_audience,
+    )
 
 
 # ─────────────────────────── FastAPI Dependency ───────────────────────────────
@@ -130,10 +142,19 @@ async def require_auth(
         raise exc
     try:
         payload = _decode_token(credentials.credentials)
-        if payload.get("sub") is None:
+        if payload.get("sub") is None or payload.get("user_id") is None:
             raise exc
-        return payload
-    except JWTError:
+        async with SessionLocal() as db:
+            user = (
+                await db.execute(select(AppUser).where(AppUser.id == int(payload["user_id"])))
+            ).scalar_one_or_none()
+        if (
+            user is None or not user.is_active or user.username != payload["sub"]
+            or user.token_version != int(payload.get("token_version", 0))
+        ):
+            raise exc
+        return {**payload, "role": user.role, "token_version": user.token_version}
+    except (InvalidTokenError, TypeError, ValueError):
         raise exc
 
 
@@ -150,6 +171,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
     description="Creates a user in the database and returns a JWT access token.",
 )
 async def register(body: RegisterRequest) -> TokenResponse:
+    if settings.is_production:
+        raise HTTPException(status_code=403, detail="Public registration is disabled")
     async with SessionLocal() as db:
         # Check username / email uniqueness
         existing = (
@@ -174,7 +197,7 @@ async def register(body: RegisterRequest) -> TokenResponse:
         await db.commit()
         await db.refresh(user)
 
-    token = _create_token({"sub": user.username, "user_id": user.id})
+    token = _create_token({"sub": user.username, "user_id": user.id, "token_version": user.token_version})
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -203,7 +226,9 @@ async def login(body: LoginRequest) -> TokenResponse:
             detail="Incorrect username or password",
         )
 
-    token = _create_token({"sub": user.username, "user_id": user.id})
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    token = _create_token({"sub": user.username, "user_id": user.id, "token_version": user.token_version})
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -234,5 +259,6 @@ async def me(current_user: Annotated[dict, Depends(require_auth)]) -> UserInfo:
         username=user.username,
         email=user.email,
         is_active=user.is_active,
+        role=user.role,
         created_at=user.created_at,
     )
