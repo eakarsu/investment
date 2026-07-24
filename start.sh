@@ -1,70 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")"
-mode="${1:---api}"
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -a
+# shellcheck disable=SC1091
+source "$project_dir/.env"
+set +a
+export JWT_ALGORITHM=HS256
+export JWT_EXPIRE_MINUTES=30
 
-if [[ "${NODE_ENV:-development}" == test ]]; then
-  DB_URL="postgresql+asyncpg://${DATABASE_URL#postgresql://}"
-  JWT_SECRET_KEY="${JWT_SECRET:-}"
-  CORS_ORIGINS="http://127.0.0.1:${FRONTEND_PORT:-}"
-  export DB_URL JWT_SECRET_KEY CORS_ORIGINS
-fi
-
-for port_name in BACKEND_PORT FRONTEND_PORT; do
-  value="${!port_name:-}"
-  [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1024 && value <= 65535 )) || { echo "$port_name must be an explicit integer between 1024 and 65535" >&2; exit 1; }
-done
-[[ "$BACKEND_PORT" != "$FRONTEND_PORT" ]] || { echo "BACKEND_PORT and FRONTEND_PORT must be different" >&2; exit 1; }
-HOST=127.0.0.1
-PORT="$BACKEND_PORT"
-WEB_PORT="$FRONTEND_PORT"
-export HOST PORT WEB_PORT
-
-if [[ ! -x .venv/bin/python ]]; then
-  echo "Dependencies are absent. Create the environment and install the locked project explicitly before startup." >&2
-  exit 1
-fi
-if [[ -z "${DB_URL:-}" ]]; then
-  echo "DB_URL is required; startup never guesses, creates, migrates, or seeds a database." >&2
-  exit 1
-fi
-
+mode="${1:-start}"
 case "$mode" in
-  --migrate)
-    exec .venv/bin/python -m backend.scripts.migrate
+  start) ;;
+  migrate)
+    export DB_URL="postgresql+asyncpg://${DATABASE_URL#postgresql://}"
+    exec "$project_dir/.venv/bin/python" -m backend.scripts.migrate
     ;;
-  --api)
-    lsof -nP -iTCP:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1 && { echo "Assigned API port $BACKEND_PORT is occupied" >&2; exit 1; }
-    exec .venv/bin/uvicorn backend.main:app --host "$HOST" --port "$BACKEND_PORT"
+  check)
+    exec "$project_dir/.venv/bin/python" -m pytest -q
     ;;
-  --web)
-    if [[ ! -d web/node_modules || ! -d web/.next ]]; then
-      echo "Web dependencies/build are absent. Run npm ci and npm run build explicitly." >&2
-      exit 1
-    fi
-    lsof -nP -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1 && { echo "Assigned web port $FRONTEND_PORT is occupied" >&2; exit 1; }
-    exec npm --prefix web run start -- --hostname 127.0.0.1 --port "$FRONTEND_PORT"
-    ;;
-  --all)
-    if [[ ! -d web/node_modules || ! -d web/.next ]]; then
-      echo "Web dependencies/build are absent. Run npm ci and npm run build explicitly." >&2
-      exit 1
-    fi
-    for assigned_port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
-      lsof -nP -iTCP:"$assigned_port" -sTCP:LISTEN >/dev/null 2>&1 && { echo "Assigned port $assigned_port is occupied" >&2; exit 1; }
-    done
-    .venv/bin/uvicorn backend.main:app --host "$HOST" --port "$BACKEND_PORT" &
-    api_pid=$!
-    finish_children() { kill "$api_pid" >/dev/null 2>&1 || true; wait "$api_pid" 2>/dev/null || true; }
-    trap finish_children EXIT INT TERM
-    npm --prefix web run start -- --hostname 127.0.0.1 --port "$FRONTEND_PORT"
-    ;;
-  -h|--help)
-    echo "Usage: ./start.sh [--api|--web|--all|--migrate]"
-    ;;
-  *)
-    echo "Usage: ./start.sh [--api|--web|--all|--migrate]" >&2
-    exit 2
-    ;;
+  *) echo 'usage: ./start.sh [start|migrate|check]' >&2; exit 2 ;;
 esac
+
+: "${DATABASE_URL:?DATABASE_URL is required}"
+: "${BACKEND_PORT:?BACKEND_PORT is required}"
+: "${FRONTEND_PORT:?FRONTEND_PORT is required}"
+: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
+: "${OPENROUTER_MODEL:?OPENROUTER_MODEL is required}"
+: "${OPENROUTER_BASE_URL:?OPENROUTER_BASE_URL is required}"
+[[ "$BACKEND_PORT" != "$FRONTEND_PORT" ]] || { echo 'BACKEND_PORT and FRONTEND_PORT must differ' >&2; exit 1; }
+for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )) || { echo 'Invalid assigned port' >&2; exit 1; }
+  ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || { echo "Port $port is occupied" >&2; exit 1; }
+done
+[[ -x "$project_dir/.venv/bin/python" ]] || { echo 'Python environment is missing' >&2; exit 1; }
+[[ -d "$project_dir/web/node_modules" ]] || { echo 'Web dependencies are missing' >&2; exit 1; }
+
+export DB_URL="postgresql+asyncpg://${DATABASE_URL#postgresql://}"
+export ENVIRONMENT=development
+export HOST=127.0.0.1
+export PORT="$BACKEND_PORT"
+export CORS_ORIGINS="http://127.0.0.1:$FRONTEND_PORT"
+export API_BASE="http://127.0.0.1:$BACKEND_PORT"
+export ALLOW_USER_PROVISION=1
+export PROVISION_USERNAME="${PROVISION_ADMIN_EMAIL:?PROVISION_ADMIN_EMAIL is required}"
+export PROVISION_EMAIL="$PROVISION_ADMIN_EMAIL"
+export PROVISION_PASSWORD="${PROVISION_ADMIN_PASSWORD:?PROVISION_ADMIN_PASSWORD is required}"
+export PROVISION_ROLE=ADMIN
+
+cd "$project_dir"
+"$project_dir/.venv/bin/python" -m backend.scripts.migrate
+"$project_dir/.venv/bin/python" -m backend.scripts.provision_user
+
+api_pid=''; ui_pid=''
+cleanup() {
+  trap - INT TERM EXIT
+  [[ -z "$ui_pid" ]] || kill "$ui_pid" 2>/dev/null || true
+  [[ -z "$api_pid" ]] || kill "$api_pid" 2>/dev/null || true
+  [[ -z "$ui_pid" ]] || wait "$ui_pid" 2>/dev/null || true
+  [[ -z "$api_pid" ]] || wait "$api_pid" 2>/dev/null || true
+}
+trap cleanup INT TERM EXIT
+
+"$project_dir/.venv/bin/uvicorn" backend.main:app --host 127.0.0.1 --port "$BACKEND_PORT" & api_pid=$!
+for _ in $(seq 1 240); do
+  curl -fsS "http://127.0.0.1:$BACKEND_PORT/readyz" >/dev/null 2>&1 && break
+  kill -0 "$api_pid" 2>/dev/null || { wait "$api_pid"; exit $?; }
+  sleep 0.25
+done
+curl -fsS "http://127.0.0.1:$BACKEND_PORT/readyz" >/dev/null
+npm --prefix "$project_dir/web" run dev -- --hostname 127.0.0.1 --port "$FRONTEND_PORT" & ui_pid=$!
+wait "$api_pid" "$ui_pid"

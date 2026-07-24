@@ -14,6 +14,7 @@ from .auth import router as auth_router
 from .config import settings, validate_runtime_config
 from .db import SessionLocal
 from .governed_trading import router as governed_router
+from .runtime_ai import router as runtime_ai_router
 
 
 @asynccontextmanager
@@ -71,6 +72,7 @@ async def security_boundary(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(governed_router)
+app.include_router(runtime_ai_router)
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -86,7 +88,7 @@ async def readyz():
             migration = (
                 await db.execute(text("SELECT name FROM schema_migrations ORDER BY applied_at DESC,name DESC LIMIT 1"))
             ).scalar_one_or_none()
-        if migration != "002_custody_controls.sql":
+        if migration != "003_runtime_ai_results.sql":
             return JSONResponse({"ok": False, "error": "required migrations are not applied"}, status_code=503)
         return {"ok": True, "migration": migration}
     except Exception:

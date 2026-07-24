@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from jwt import InvalidTokenError
-from passlib.context import CryptContext
+import bcrypt
 from pydantic import BaseModel, Field
 from sqlalchemy import String, DateTime, Integer, select
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,7 +40,6 @@ SECRET_KEY: str = settings.jwt_secret_key
 ALGORITHM: str = "HS256"
 EXPIRE_MINUTES: int = settings.jwt_expire_minutes
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 # ─────────────────────────── DB Model ─────────────────────────────────────────
@@ -93,11 +92,14 @@ class UserInfo(BaseModel):
 # ─────────────────────────── Helpers ──────────────────────────────────────────
 
 def _hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def _create_token(data: dict) -> str:
