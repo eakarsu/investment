@@ -21,6 +21,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
@@ -163,6 +165,17 @@ async def require_auth(
 # ─────────────────────────── Router ───────────────────────────────────────────
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+@router.get("/demo-credentials")
+async def demo_credentials():
+    if os.getenv("NODE_ENV", "development") == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+    email = os.getenv("PROVISION_ADMIN_EMAIL") or os.getenv("ADMIN_EMAIL") or ""
+    password = os.getenv("PROVISION_ADMIN_PASSWORD") or os.getenv("ADMIN_PASSWORD") or ""
+    if not email or not password:
+        raise HTTPException(status_code=503, detail="Demo credentials unavailable")
+    return {"email": email, "password": password}
 
 
 @router.post(
