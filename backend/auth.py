@@ -71,7 +71,8 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(..., description="Username or email")
+    username: str | None = Field(None, description="Username or email")
+    email: str | None = Field(None, description="Email alias accepted by browser clients")
     password: str = Field(..., min_length=1, max_length=256, description="Account password")
 
 
@@ -175,7 +176,7 @@ async def demo_credentials():
     password = os.getenv("PROVISION_ADMIN_PASSWORD") or os.getenv("ADMIN_PASSWORD") or ""
     if not email or not password:
         raise HTTPException(status_code=503, detail="Demo credentials unavailable")
-    return {"email": email, "password": password}
+    return {"username": email, "email": email, "password": password}
 
 
 @router.post(
@@ -228,10 +229,13 @@ async def register(body: RegisterRequest) -> TokenResponse:
     description="Accepts username and password, returns a short-lived bearer token.",
 )
 async def login(body: LoginRequest) -> TokenResponse:
+    identifier = (body.username or body.email or "").strip()
+    if not identifier:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username or email is required")
     async with SessionLocal() as db:
         user = (
             await db.execute(
-                select(AppUser).where(AppUser.username == body.username)
+                select(AppUser).where((AppUser.username == identifier) | (AppUser.email == identifier.lower()))
             )
         ).scalar_one_or_none()
 
