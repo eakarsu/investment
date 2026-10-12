@@ -2,6 +2,7 @@ from datetime import timedelta
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -24,6 +25,12 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 30
     jwt_issuer: str = "investment-paper-api"
     jwt_audience: str = "investment-paper-clients"
+
+    # Existing provisioned development account; no account is created here.
+    provision_admin_email: str = ""
+    provision_admin_password: SecretStr = SecretStr("")
+    admin_email: str = ""
+    admin_password: SecretStr = SecretStr("")
 
     # Alpha Vantage for real price data (free tier: 25 calls/day)
     alpha_vantage_api_key: str = ""

@@ -1,10 +1,13 @@
 "use client";
+import { useRef as useDemoLoginRef, useState as useDemoLoginState } from 'react';
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
 export default function LoginPage() {
+ const demoLoginLock = useDemoLoginRef(false); const [demoLoginBusy, setDemoLoginBusy] = useDemoLoginState(false);
+
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -21,8 +24,12 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const response = await fetch("/api/auth/demo-credentials", { cache: "no-store" });
-      const credentials = await response.json();
-      if (!response.ok) throw new Error(credentials.detail || credentials.error || "Demo credentials are unavailable");
+      const credentials = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(
+        response.status === 404 ? "Demo sign-in is available only in development." :
+        response.status === 502 || response.status === 503 ? "Demo sign-in is unavailable while the API is offline." :
+        credentials.detail || credentials.error || "Demo credentials are unavailable"
+      );
       const demoUsername = credentials.username || credentials.email || "";
       const demoPassword = credentials.password || "";
       if (!demoUsername || !demoPassword) throw new Error("Demo credentials are unavailable");
@@ -43,7 +50,7 @@ export default function LoginPage() {
       <label className="block text-xs text-muted">Username<input className="w-full bg-bg border border-muted/30 rounded px-2 py-2" value={username} onChange={event => setUsername(event.target.value)} required /></label>
       <label className="block text-xs text-muted">Password<input type="password" className="w-full bg-bg border border-muted/30 rounded px-2 py-2" value={password} onChange={event => setPassword(event.target.value)} minLength={12} required /></label>
       {error && <p role="alert" className="text-danger text-sm">{error}</p>}
-      <button type="button" onClick={fillDemoCredentials} disabled={loading} className="border border-muted/30 px-4 py-2 rounded font-medium disabled:opacity-50">Auto Fill Demo Credentials</button>
+      <button type="button" onClick={async (event) => { if (demoLoginLock.current) return; demoLoginLock.current = true; setDemoLoginBusy(true); try { await (fillDemoCredentials)(); } finally { demoLoginLock.current = false; setDemoLoginBusy(false); } }} disabled={demoLoginBusy || (loading)} className="border border-muted/30 px-4 py-2 rounded font-medium disabled:opacity-50">Log In as Demo</button>
       <button disabled={loading} className="bg-accent text-bg px-4 py-2 rounded font-medium disabled:opacity-50">{loading ? "Signing in…" : "Sign In"}</button>
     </form>
   </div>;

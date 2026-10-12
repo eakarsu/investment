@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import String, DateTime, Integer, select
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
 from .db import Base, SessionLocal
@@ -159,6 +160,8 @@ async def require_auth(
         ):
             raise exc
         return {**payload, "role": user.role, "token_version": user.token_version}
+    except (OSError, SQLAlchemyError) as error:
+        raise HTTPException(status_code=503, detail="Authentication database is unavailable") from error
     except (InvalidTokenError, TypeError, ValueError):
         raise exc
 
@@ -170,10 +173,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.get("/demo-credentials")
 async def demo_credentials():
-    if os.getenv("NODE_ENV", "development") == "production":
+    if settings.is_production or os.getenv("NODE_ENV", "development") == "production":
         raise HTTPException(status_code=404, detail="Not found")
-    email = os.getenv("PROVISION_ADMIN_EMAIL") or os.getenv("ADMIN_EMAIL") or ""
-    password = os.getenv("PROVISION_ADMIN_PASSWORD") or os.getenv("ADMIN_PASSWORD") or ""
+    email = settings.provision_admin_email or settings.admin_email
+    password = (settings.provision_admin_password.get_secret_value()
+                or settings.admin_password.get_secret_value())
     if not email or not password:
         raise HTTPException(status_code=503, detail="Demo credentials unavailable")
     return {"username": email, "email": email, "password": password}
@@ -232,12 +236,15 @@ async def login(body: LoginRequest) -> TokenResponse:
     identifier = (body.username or body.email or "").strip()
     if not identifier:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username or email is required")
-    async with SessionLocal() as db:
-        user = (
-            await db.execute(
-                select(AppUser).where((AppUser.username == identifier) | (AppUser.email == identifier.lower()))
-            )
-        ).scalar_one_or_none()
+    try:
+        async with SessionLocal() as db:
+            user = (
+                await db.execute(
+                    select(AppUser).where((AppUser.username == identifier) | (AppUser.email == identifier.lower()))
+                )
+            ).scalar_one_or_none()
+    except (OSError, SQLAlchemyError) as error:
+        raise HTTPException(status_code=503, detail="Authentication database is unavailable") from error
 
     if user is None or not _verify_password(body.password, user.hashed_password):
         raise HTTPException(

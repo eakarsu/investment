@@ -38,6 +38,7 @@ export default function GovernedConsole() {
   }); };
 
   return <div className="codex-section-shell"><SectionSidebar title="Paper Trading" items={[
+    { href: '/ai-workspace', label: 'AI workspace' },
     { href: '#overview', label: 'Overview' }, { href: '#market', label: 'Market Evidence' },
     { href: '#draft', label: 'Order Draft' }, { href: '#review', label: 'Independent Review' },
     { href: '#fill', label: 'Paper Fill' }, { href: '#reconcile', label: 'Reconciliation' },

@@ -1,0 +1,3 @@
+import {NextRequest,NextResponse} from 'next/server';
+async function forward(request:NextRequest){try{const upstream=await fetch((process.env.API_BASE||'http://localhost:8080').replace(/[/]$/,'')+'/api/runtime-ai/investment-readiness',{method:request.method,headers:{'Content-Type':'application/json',Authorization:request.headers.get('authorization')||''},body:request.method==='POST'?await request.text():undefined,signal:request.signal,cache:'no-store'});return new NextResponse(await upstream.text(),{status:upstream.status,headers:{'Content-Type':'application/json'}});}catch{ return NextResponse.json({error:request.signal.aborted?'Request cancelled':'Native API unavailable'},{status:request.signal.aborted?499:502});}}
+export const GET=forward;export const POST=forward;
